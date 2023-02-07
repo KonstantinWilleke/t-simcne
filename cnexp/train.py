@@ -18,37 +18,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
 
 from .base import ProjectBase
-from .callback import make_callbacks
+from .callback import make_callbacks, to_features
 from .misc.telegram_send import get_token_chat_id
 
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
-
-@contextmanager
-def elapsed_time() -> float:
-    """Context manager to measure the elapsed time in seconds.
-
-    Returns a function that should be called right after the context
-    ends to measure the elapsed time.
-
-    Example
-    -------
-
-        with elapsed_time() as t:
-            sleep(1)
-        elapsed_time_in_secs = t()
-
-
-    Notes
-    -----
-    Adapted from `https://stackoverflow.com/questions/33987060/
-    python-context-manager-that-measures-time`.
-
-    """
-    start = time.perf_counter()
-    yield lambda: time.perf_counter() - start
 
 
 def load_or_initialize(
@@ -134,8 +110,10 @@ def train(
     checkpoint_valid: bool,
     n_epochs: int = None,
     device: torch.device = "cuda:0",
-    callbacks: list = None,
     seed=None,
+    store_Z_n_epochs=None,
+    plain_dataloader=None,
+    disable_tqdm=False,
     **kwargs,
 ):
     if seed is not None:
@@ -148,10 +126,7 @@ def train(
     init = load_or_initialize(
         checkpoint, n_epochs, n_batches, checkpoint_valid
     )
-    losses = init["losses"]
-    timedict = init["timedict"]
     lrs = init["lrs"]
-    memdict = init["memdict"]
     start_epoch = init["start_epoch"]
     infodict = init["infodict"]
     if "state_dict" in init:
@@ -165,91 +140,35 @@ def train(
     lrs[start_epoch] = lrsched.get_last_lr()
     infodict["lr"] = lrsched.get_last_lr()
 
-    cb_kwargs = dict(
-        opt=opt,
-        lrsched=lrsched,
-        losses=losses,
-        times=timedict,
-        lrs=lrs,
-        memdict=memdict,
-        device=device,
-    )
+    losses, zs = [], []
 
-    if callbacks is not None:
-        [
-            c(
-                model,
-                float("nan"),
-                float("inf"),
-                **cb_kwargs,
-                mode="pre-train",
-            )
-            for c in callbacks
-        ]
+    epochs_iter = trange(
+        start_epoch,
+        n_epochs,
+        initial=start_epoch,
+        total=n_epochs,
+        unit="epoch",
+        ncols=80,
+        disable=disable_tqdm,
+        )
 
-    try:
-        rc = get_token_chat_id()
-        name = os.getenv("SLURM_JOB_NAME")
-        epochs_iter = tqdm_telegram.trange(
-            start_epoch,
-            n_epochs,
-            initial=start_epoch,
-            total=n_epochs,
-            desc=name,
-            unit="epoch",
-            ncols=120,
-            postfix=infodict,
-            leave=False,
-            **rc,
-        )
-    except:
-        epochs_iter = trange(
-            start_epoch,
-            n_epochs,
-            initial=start_epoch,
-            total=n_epochs,
-            unit="epoch",
-            ncols=80,
-            postfix=infodict,
-        )
     for epoch in epochs_iter:
         batch_ret = train_one_epoch(
-            dataloader, model, criterion, opt, device=device, **kwargs
+            dataloader, model, criterion, opt, device=device, disable_tqdm=disable_tqdm, **kwargs
         )
-        losses[epoch, :] = batch_ret["batch_losses"].detach().numpy()
-        mean_loss = losses[epoch, :].mean()
-        for key in timedict.keys():
-            timedict[key][epoch, :] = batch_ret[key]
+
+        mean_loss = batch_ret["batch_losses"].mean().numpy()
+        losses.append(mean_loss)
 
         lr = lrsched.step()
         lrs[epoch + 1] = lr
 
-        if torch.cuda.is_available():
-            info = torch.cuda.memory_stats(device)
-            [memdict[k].append(info[k]) for k in memdict.keys()]
+        if store_Z_n_epochs is not None and plain_dataloader is not None:
+            if (epoch % store_Z_n_epochs == 0):
+                z, _, _ = to_features(model=model, dataloader=plain_dataloader, device=device, to_float16=False)
+                zs.append(z)
 
-        if callbacks is not None:
-            [
-                c(model, epoch, mean_loss, infodict=infodict, **cb_kwargs)
-                for c in callbacks
-            ]
-
-        infodict["loss"] = mean_loss.item()
-        infodict["lr"] = lr
-        epochs_iter.set_postfix(infodict, refresh=False)
-
-    if callbacks is not None:
-        [
-            c(model, epoch, losses.mean(), **cb_kwargs, mode="post-train")
-            for c in callbacks
-        ]
-
-    ix = pd.RangeIndex(stop=losses.shape[0], name="epoch")
-    cols = pd.RangeIndex(stop=losses.shape[1], name="batch")
-    losses_df = pd.DataFrame(losses, index=ix, columns=cols)
-    mem_df = pd.DataFrame(memdict, index=ix)
-
-    return dict(losses=losses_df, lrs=lrs, memory=mem_df, times=timedict)
+    return dict(losses=losses, lrs=lrs, zs=zs)
 
 
 def train_one_epoch(
@@ -258,6 +177,7 @@ def train_one_epoch(
     criterion: nn.Module,
     opt: Optimizer,
     device: torch.device,
+    disable_tqdm=False,
     **kwargs,
 ):
     if kwargs.get("readout_mode", False):
@@ -269,18 +189,6 @@ def train_one_epoch(
         model.train()
 
     losses = torch.empty(len(dataloader))
-    # time dictionary
-    td = {
-        key: np.empty(len(dataloader), dtype=np.float16)
-        for key in [
-            "t_dataload",
-            "t_forward",
-            "t_loss",
-            "t_backward",
-            "t_optstep",
-            "t_batch",
-        ]
-    }
 
     for i, batch in tqdm(
         enumerate(dataloader),
@@ -290,39 +198,25 @@ def train_one_epoch(
         mininterval=0.75,
         miniters=1,
         leave=False,
+        disable=disable_tqdm,
     ):
-        with elapsed_time() as t_batch:
-            with elapsed_time() as t:
-                (data1, data2), orig_label = batch
-                samples = torch.vstack((data1, data2)).to(device)
-            td["t_dataload"][i] = t()
 
-            with elapsed_time() as t:
-                features, backbone_features = model(samples)
-            td["t_forward"][i] = t()
+        (data1, data2), orig_label = batch
+        samples = torch.vstack((data1, data2)).to(device)
 
-            with elapsed_time() as t:
-                # `backbone_features` and `labels` are usually
-                # discarded in the loss.
-                loss = criterion(
-                    features,
-                    backbone_features=backbone_features,
-                    labels=orig_label,
-                )
-            td["t_loss"][i] = t()
-            with elapsed_time() as t:
-                opt.zero_grad(set_to_none=True)
-                loss.backward()
-            td["t_backward"][i] = t()
-            with elapsed_time() as t:
-                opt.step()
-            td["t_optstep"][i] = t()
+        features, backbone_features = model(samples)
 
-            losses[i] = loss.item()
+        loss = criterion(
+            features,
+            backbone_features=backbone_features,
+            labels=orig_label,
+        )
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        losses[i] = loss.item()
 
-        td["t_batch"][i] = t_batch()
-
-    return dict(batch_losses=losses, **td)
+    return dict(batch_losses=losses,)
 
 
 def get_n_epochs(n_epochs, lrsched):
