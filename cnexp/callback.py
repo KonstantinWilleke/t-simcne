@@ -233,7 +233,7 @@ def make_callbacks(
     return callbacks
 
 
-def to_features(model, dataloader, device):
+def to_features(model, dataloader, device, to_float16=True):
     """Iterate over a whole dataset/loader and return the results.
 
     This will transform all of the input in `dataloader` by passing it
@@ -249,16 +249,22 @@ def to_features(model, dataloader, device):
 
     model.eval()
     with torch.no_grad():
-        for (im1, _im2), lbls in dataloader:
-            features, backbone_features = model(im1.to(device))
+        for im1, lbls in dataloader:
+            if isinstance(im1, tuple) or isinstance(im1, list):
+                im1, _im2 = im1
 
+            features, backbone_features = model(im1.to(device))
             feats.append(features.cpu().numpy())
             bb_feats.append(backbone_features.cpu().numpy())
             labels.append(lbls)
-
-    Z = np.vstack(feats).astype(np.float16)
-    H = np.vstack(bb_feats).astype(np.float16)
-    labels = np.hstack(labels).astype(np.uint8)
+    if to_float16:
+        Z = np.vstack(feats).astype(np.float16)
+        H = np.vstack(bb_feats).astype(np.float16)
+        labels = np.hstack(labels).astype(np.uint8)
+    else:
+        Z = np.vstack(feats)
+        H = np.vstack(bb_feats)
+        labels = np.hstack(labels)
 
     return Z, H, labels
 
