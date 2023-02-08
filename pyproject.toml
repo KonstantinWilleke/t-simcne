@@ -29,7 +29,3 @@ homepage = ""
 
 [tool]
 [tool.pdm]
-
-[build-system]
-requires = ["pdm-pep517"]
-build-backend = "pdm.pep517.api"
