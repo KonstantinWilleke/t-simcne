@@ -114,6 +114,7 @@ def train(
     store_Z_n_epochs=None,
     plain_dataloader=None,
     disable_tqdm=False,
+    call_back=None,
     **kwargs,
 ):
     if seed is not None:
@@ -162,6 +163,9 @@ def train(
 
         lr = lrsched.step()
         lrs[epoch + 1] = lr
+
+        if call_back is not None:
+            call_back()
 
         if store_Z_n_epochs is not None and plain_dataloader is not None:
             if (epoch % store_Z_n_epochs == 0):
