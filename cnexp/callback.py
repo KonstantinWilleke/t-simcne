@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch import cdist
 from sklearn.model_selection import train_test_split
 
 from .eval.ann import ann_acc
@@ -267,6 +268,26 @@ def to_features(model, dataloader, device, to_float16=True):
         labels = np.hstack(labels)
 
     return Z, H, labels
+
+
+def to_distance(model, dataloader, device,):
+    """Iterate over a whole dataset/loader and return the results.
+
+    This will transform all of the input in `dataloader` by passing it
+    through the `model`.  The model will be put into eval mode
+    `model.eval()`.  The result will be numpy arrays, suitable for
+    storing with `np.save()`.
+
+    """
+    distances = []
+
+    model.eval()
+    with torch.no_grad():
+        for im, lbls in dataloader:
+            features, _ = model(im.to(device))
+            distances.append(cdist(features, features).mean())
+    distances = torch.hstack(distances).cpu().numpy()
+    return distances
 
 
 def ann_evaluation(
