@@ -286,7 +286,7 @@ def to_distance(model, dataloader, device,):
         for im, lbls in dataloader:
             features, _ = model(im.to(device))
             distances.append(cdist(features, features).mean())
-    distances = torch.hstack(distances).cpu().numpy()
+    distances = torch.hstack(distances).nanmean().cpu().numpy()
     return distances
 
 
