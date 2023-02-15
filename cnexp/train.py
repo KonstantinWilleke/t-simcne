@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm, trange
 
 from .base import ProjectBase
-from .callback import make_callbacks, to_features
+from .callback import make_callbacks, to_features, to_distance
 from .misc.telegram_send import get_token_chat_id
 
 
@@ -115,6 +115,9 @@ def train(
     plain_dataloader=None,
     disable_tqdm=False,
     call_back=None,
+    runs_per_epoch=1,
+    dei_val_loss=None,
+    dei_loader=None,
     **kwargs,
 ):
     if seed is not None:
@@ -141,7 +144,7 @@ def train(
     lrs[start_epoch] = lrsched.get_last_lr()
     infodict["lr"] = lrsched.get_last_lr()
 
-    losses, zs = [], []
+    losses, zs, distances = [], [],[]
 
     epochs_iter = trange(
         start_epoch,
@@ -154,11 +157,12 @@ def train(
         )
 
     for epoch in epochs_iter:
+        print("epoch done")
         batch_ret = train_one_epoch(
-            dataloader, model, criterion, opt, device=device, disable_tqdm=disable_tqdm, **kwargs
+            dataloader, model, criterion, opt, device=device, disable_tqdm=disable_tqdm,runs_per_epoch=runs_per_epoch, **kwargs
         )
 
-        mean_loss = batch_ret["batch_losses"].mean().numpy()
+        mean_loss = batch_ret["batch_losses"].nanmean().numpy()
         losses.append(mean_loss)
 
         lr = lrsched.step()
@@ -172,7 +176,12 @@ def train(
                 z, _, _ = to_features(model=model, dataloader=plain_dataloader, device=device, to_float16=False)
                 zs.append(z)
 
-    return dict(losses=losses, lrs=lrs, zs=zs)
+        if dei_loader is not None and dei_val_loss is not None:
+            if (epoch % dei_val_loss == 0):
+                distance = to_distance(model=model, dataloader=dei_loader, device=device)
+                distances.append(distance)
+
+    return dict(losses=losses, lrs=lrs, zs=zs, distances=distances)
 
 
 def train_one_epoch(
@@ -182,6 +191,7 @@ def train_one_epoch(
     opt: Optimizer,
     device: torch.device,
     disable_tqdm=False,
+    runs_per_epoch=1,
     **kwargs,
 ):
     if kwargs.get("readout_mode", False):
@@ -192,33 +202,35 @@ def train_one_epoch(
     else:
         model.train()
 
-    losses = torch.empty(len(dataloader))
+    losses = torch.empty(len(dataloader)*runs_per_epoch)
 
-    for i, batch in tqdm(
-        enumerate(dataloader),
-        total=len(dataloader),
-        unit="batch",
-        ncols=80,
-        mininterval=0.75,
-        miniters=1,
-        leave=False,
-        disable=disable_tqdm,
-    ):
+    for run in range(runs_per_epoch):
 
-        (data1, data2), orig_label = batch
-        samples = torch.vstack((data1, data2)).to(device)
+        for i, batch in tqdm(
+            enumerate(dataloader),
+            total=len(dataloader),
+            unit="batch",
+            ncols=80,
+            mininterval=0.75,
+            miniters=1,
+            leave=False,
+            disable=disable_tqdm,
+        ):
 
-        features, backbone_features = model(samples)
+            (data1, data2), orig_label = batch
+            samples = torch.vstack((data1, data2)).to(device)
 
-        loss = criterion(
-            features,
-            backbone_features=backbone_features,
-            labels=orig_label,
-        )
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-        losses[i] = loss.item()
+            features, backbone_features = model(samples)
+
+            loss = criterion(
+                features,
+                backbone_features=backbone_features,
+                labels=orig_label,
+            )
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+            losses[i] = loss.item()
 
     return dict(batch_losses=losses,)
 
