@@ -159,7 +159,7 @@ def train(
     for epoch in epochs_iter:
         print("epoch done")
         batch_ret = train_one_epoch(
-            dataloader, model, criterion, opt, device=device, disable_tqdm=disable_tqdm,runs_per_epoch=runs_per_epoch, **kwargs
+            dataloader, model, criterion, opt, device=device, disable_tqdm=disable_tqdm, runs_per_epoch=runs_per_epoch, **kwargs
         )
 
         mean_loss = batch_ret["batch_losses"].nanmean().numpy()
@@ -203,6 +203,7 @@ def train_one_epoch(
         model.train()
 
     losses = torch.empty(len(dataloader)*runs_per_epoch)
+    step=0
 
     for run in range(runs_per_epoch):
 
@@ -230,7 +231,8 @@ def train_one_epoch(
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
-            losses[i] = loss.item()
+            losses[step] = loss.item()
+            step += 1
 
     return dict(batch_losses=losses,)
 
