@@ -74,7 +74,7 @@ class CosineAnnealingSchedule(_LRScheduler):
     def get_lr(self):
         return self.lr_schedule[self.cur_epoch]
 
-    def step(self):
+    def step(self, objective=None, **kwargs):
         for param_group in self.opt.param_groups:
             lr = param_group["lr"] = self.get_lr()
 
