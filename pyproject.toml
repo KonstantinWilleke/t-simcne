@@ -23,9 +23,5 @@ dependencies = [
 requires-python = ">=3.8"
 license = {text = "EUPL"}
 
-[project.urls]
-homepage = ""
-
-
 [tool]
 [tool.pdm]
