@@ -355,7 +355,7 @@ class TSimCNE:
 
     def fit_transform(
         self,
-        X: torch.utils.data.Dataset | str,
+        X,
         data_transform=None,
         return_labels: bool = False,
         return_backbone_feat: bool = False,
@@ -392,7 +392,7 @@ class TSimCNE:
             return_backbone_feat=return_backbone_feat,
         )
 
-    def fit(self, X: torch.utils.data.Dataset | str):
+    def fit(self, X):
         """Learn the mapping from the dataset ``X`` to 2D.
 
         :param X: The image dataset to be used for training.  Will be
