@@ -71,7 +71,9 @@ class PLtSimCNE(pl.LightningModule):
             elif self.metric == "gauss":
                 self.loss = InfoNCEGaussian()
             else:
-                raise ValueError(f"Unknown {self.metric = !r} for InfoNCE loss")
+                raise ValueError(
+                    f"Unknown {self.metric = !r} for InfoNCE loss"
+                )
         # else: assume that the loss is a proper pytorch loss function
 
         if self.lr == "auto_batch":
@@ -101,9 +103,13 @@ class PLtSimCNE(pl.LightningModule):
         lrsched = CosineAnnealingSchedule(
             opt, n_epochs=self.n_epochs, warmup_epochs=self.warmup
         )
-        return [opt], [
-            {"scheduler": lrsched, "interval": "epoch"}
-        ]  # interval "step" for batch update
+        return {
+            "optimizer": opt,
+            "lr_scheduler": {
+                "scheduler": lrsched,
+                "interval": "epoch",
+            },  # interval "step" for batch update
+        }
 
     def training_step(self, batch):
         if self.use_ffcv:
@@ -176,11 +182,11 @@ class TSimCNE:
         cropping, greyscaling, color jitter, horizontal flips.  This
         parameter should be changed with care.
 
-    :param total_epochs: A list of the number of epochs per training
-        stage.  The ratio between the stages should be roughly
-        preserved and it should also be exactly three.  You can also
-        pass a single integer, which will then only fit the first
-        stage.
+    :param [1000, 50, 450] total_epochs: A list of the number of
+        epochs per training stage.  The ratio between the stages
+        should be roughly preserved and it should also be exactly
+        three.  You can also pass a single integer, which will then
+        only fit the first stage.
 
     :param 512 batch_size: The number of images in one batch.  Note
         that this parameter should be set as high as the memory of the
@@ -335,7 +341,9 @@ class TSimCNE:
                 f"but got {self.freeze_schedule}."
             )
 
-        if self.use_ffcv:
+    @staticmethod
+    def check_ffcv(use_ffcv):
+        if use_ffcv:
             try:
                 import ffcv
 
@@ -378,9 +386,6 @@ class TSimCNE:
 
         """
         self.fit(X)
-        data_transform = (
-            data_transform if data_transform is not None else self.data_transform_none
-        )
         return self.transform(
             X,
             data_transform=data_transform,
@@ -403,6 +408,7 @@ class TSimCNE:
                 self.use_ffcv = True
             else:
                 self.use_ffcv = False
+        self.check_ffcv(self.use_ffcv)
 
         if isinstance(X, torch.utils.data.dataloader.DataLoader):
             train_dl = X
@@ -414,7 +420,9 @@ class TSimCNE:
         )
 
         self.loader = train_dl
-        it = zip(self.epoch_schedule, self.learning_rates, self.warmup_schedules)
+        it = zip(
+            self.epoch_schedule, self.learning_rates, self.warmup_schedules
+        )
         self.models = []
         self.trainers = []
         for n_stage, (n_epochs, lr, warmup_epochs) in enumerate(it):
@@ -481,7 +489,26 @@ class TSimCNE:
         return_labels: bool = False,
         return_backbone_feat: bool = False,
     ):
-        loader = self.make_dataloader(X, False, self.data_transform_none)
+        """Perform the 2D transform on the dataset, using the trained model.
+        :param X: The image dataset to be used for transformation.  Will be
+            wrapped into a data loader automatically.  If
+            ``use_ffcv=True``, then it needs to be a string pointing
+            to the .beton file.
+        :param data_transform: the data transformation to use for
+            calculating the final 2D embedding.  By default it will
+            not perform any data augmentation (as this is only
+            relevant during training).
+        :param False return_labels: Whether to return the labels that are
+            part of the dataset.
+        :param False return_backbone_feat: Whether to return the
+            high-dimensional features of the backbone.
+        """
+        data_transform = (
+            data_transform
+            if data_transform is not None
+            else self.data_transform_none
+        )
+        loader = self.make_dataloader(X, False, data_transform)
         trainer = pl.Trainer(devices=1)
         pred_batches = trainer.predict(self.plmodel, loader)
         Y = torch.vstack([x[0] for x in pred_batches]).numpy()
@@ -607,9 +634,11 @@ class TSimCNE:
         if mode == "lin-bs":
             lr = 0.03 * batch_size / 256
         elif mode == "sqrt-bs":
-            lr = 0.075 * batch_size ** 0.5
+            lr = 0.075 * batch_size**0.5
         else:
-            raise ValueError(f"Unknown mode for calculating the lr ({mode = !r})")
+            raise ValueError(
+                f"Unknown mode for calculating the lr ({mode = !r})"
+            )
         return lr
 
 
