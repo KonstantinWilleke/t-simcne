@@ -71,9 +71,7 @@ class PLtSimCNE(pl.LightningModule):
             elif self.metric == "gauss":
                 self.loss = InfoNCEGaussian()
             else:
-                raise ValueError(
-                    f"Unknown {self.metric = !r} for InfoNCE loss"
-                )
+                raise ValueError(f"Unknown {self.metric = !r} for InfoNCE loss")
         # else: assume that the loss is a proper pytorch loss function
 
         if self.lr == "auto_batch":
@@ -381,9 +379,7 @@ class TSimCNE:
         """
         self.fit(X)
         data_transform = (
-            data_transform
-            if data_transform is not None
-            else self.data_transform_none
+            data_transform if data_transform is not None else self.data_transform_none
         )
         return self.transform(
             X,
@@ -408,16 +404,17 @@ class TSimCNE:
             else:
                 self.use_ffcv = False
 
-        train_dl = self.make_dataloader(X, True, None)
+        if isinstance(X, torch.utils.data.dataloader.DataLoader):
+            train_dl = X
+        else:
+            train_dl = self.make_dataloader(X, True, None)
 
         self.data_transform_none = get_transforms_unnormalized(
             size=self.image_size, setting="none", use_ffcv=self.use_ffcv
         )
 
         self.loader = train_dl
-        it = zip(
-            self.epoch_schedule, self.learning_rates, self.warmup_schedules
-        )
+        it = zip(self.epoch_schedule, self.learning_rates, self.warmup_schedules)
         self.models = []
         self.trainers = []
         for n_stage, (n_epochs, lr, warmup_epochs) in enumerate(it):
@@ -610,11 +607,9 @@ class TSimCNE:
         if mode == "lin-bs":
             lr = 0.03 * batch_size / 256
         elif mode == "sqrt-bs":
-            lr = 0.075 * batch_size**0.5
+            lr = 0.075 * batch_size ** 0.5
         else:
-            raise ValueError(
-                f"Unknown mode for calculating the lr ({mode = !r})"
-            )
+            raise ValueError(f"Unknown mode for calculating the lr ({mode = !r})")
         return lr
 
 
